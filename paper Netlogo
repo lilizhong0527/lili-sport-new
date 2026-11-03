@@ -1,0 +1,364 @@
+
+; ###########################################################
+
+globals [
+  avg-degree            ;网络平均度
+  number_runners        ;智能体数量
+  fashion-ratio         ;参与人数占智能体的比例
+  prob_communication    ;大众传媒传播 
+  m_age                 ;决策概率最高对应的年龄
+  k_age                 ;决策与年龄的曲线峰度
+  m_income              ;决策概率最高对应的收入
+  k_income              ;决策与收入的曲线峰度
+  completion-rate       ;完赛率
+  threshold_intend      ;采纳（即被说服）的阈值
+  ineffect_per          ;心理动机变化单位
+  sportpolicy           ;政策影响
+  K_second              ;采纳概率与内外因素曲线峰度
+  T_second              ;采纳概率与内外因素曲线峰度
+  neighbor_effect       ;邻居带动效应
+  hesitation-range      ;采纳犹豫区间
+  β
+  people-effect         ;外部人际效应
+  media-effect          ;外部媒体效应
+  
+  prob-ineffect         ;内部动机概率
+  prob-exeffect         ;外部影响概率
+  prob-intend           ;采纳概率
+        
+
+ ; 累计统计（按采纳者类型）
+  cumu-leader-know
+  cumu-leader-intend
+  cumu-leader-participate
+  cumu-leader-sustain
+
+  
+  cumu-mass-know
+  cumu-mass-intend
+  cumu-mass-participate
+  cumu-mass-sustain
+
+  cumu-laggard-know
+  cumu-laggard-intend
+  cumu-laggard-participate
+  cumu-laggard-sustain
+
+  cumu-know-total
+  cumu-intend-total
+  cumu-participate-total
+  cumu-sustain-total
+  intendvalue
+  exffectvalue
+  inffectvalue
+] 
+turtles-own [
+  state
+  runner-type
+  age
+  disposable-income
+  autonomy
+  competence
+  relatedness 
+  positive-experience
+  participation-count
+  my-neighbors
+  know
+  intend
+  participate
+  sustain       
+  prob_participate   
+  interpersonal-effect
+  current-prob-intend     
+  current-prob-exeffect   
+  current-prob-ineffect   
+]
+
+to setup
+  clear-all
+  reset-ticks
+  no-display
+  set number_runners 2000
+  create-turtles number_runners [
+  ; ---------- 1. 按比例分配四种跑者类别（直接 if-else，清晰简洁） ----------
+    if peopleallocate = 1 [
+    let r random-float 1.0
+    if r < 0.135 [ set runner-type "leader" ]   
+    if r >= 0.135 and r < 0.65 [ set runner-type "mass" ]       
+    if r >= 0.65[ set runner-type "laggard" ]  ]
+    if peopleallocate = 2 [
+    let r random-float 1.0
+    if r < 0.135[ set runner-type "leader" ]   
+    if r >= 0.10 and r < 0.7 [ set runner-type "mass" ]       
+    if r >= 0.7[ set runner-type "laggard" ]  ]
+    if peopleallocate = 3 [
+    let r random-float 1.0
+    if r < 0.135[ set runner-type "leader" ]   
+    if r >= 0.10 and r < 0.3 [ set runner-type "mass" ]       
+    if r >= 0.3[ set runner-type "laggard" ]  ]
+
+    ; ---------- 2. 设置心理变量参数（归一化后，2位小数） ----------
+    let mn-auto 0.0  let sd-auto 0.0  let min-auto 0.0  let max-auto 0.0
+    let mn-comp 0.0  let sd-comp 0.0  let min-comp 0.0  let max-comp 0.0
+    let mn-rel  0.0  let sd-rel  0.0  let min-rel  0.0  let max-rel  0.0
+    if runner-type = "leader" [
+      set mn-auto 0.89  set sd-auto 0.08  set min-auto 0.81  set max-auto 1.00
+      set mn-comp 0.85  set sd-comp 0.12  set min-comp 0.73  set max-comp 1.00
+      set mn-rel  0.72  set sd-rel  0.22  set min-rel  0.50  set max-rel  0.94
+    ]
+    if runner-type = "mass" [
+      set mn-auto 0.71  set sd-auto 0.19  set min-auto 0.52  set max-auto 0.90
+      set mn-comp 0.63  set sd-comp 0.22  set min-comp 0.40  set max-comp 0.85
+      set mn-rel  0.51  set sd-rel  0.29  set min-rel  0.22  set max-rel  0.79
+    ]
+    if runner-type = "laggard" [
+      set mn-auto 0.52  set sd-auto 0.17  set min-auto 0.34  set max-auto 0.69
+      set mn-comp 0.43  set sd-comp 0.19  set min-comp 0.24  set max-comp 0.62
+      set mn-rel  0.30  set sd-rel  0.22  set min-rel  0.09  set max-rel  0.52
+    ]
+  ; ---------- 3. 生成心理变量（正态分布 + 截断） ----------
+    set autonomy random-normal mn-auto sd-auto
+    while [autonomy < min-auto or autonomy > max-auto] [set autonomy random-normal mn-auto sd-auto]
+
+    set competence random-normal mn-comp sd-comp
+    while [competence < min-comp or competence > max-comp] [set competence random-normal mn-comp sd-comp]
+
+    set relatedness random-normal mn-rel sd-rel
+    while [relatedness < min-rel or relatedness > max-rel] [set relatedness random-normal mn-rel sd-rel]
+
+    ; ---------- 4. 年龄与收入（均匀分布 + 截断） ----------
+    set age random-float (70 - 15) + 15
+    while [age < 15 or age > 70] [set age random-float (70 - 15) + 15]
+
+    set disposable-income random-float (92000 - 35000) + 35000
+    set state "unknown"
+    set participation-count 0
+    setxy random-pxcor random-pycor
+    set shape "person"
+    set color gray 
+    set know false
+    set intend false
+    set participate false
+    set sustain false
+
+  ]
+  ask turtles [ set my-neighbors min-n-of 5 (other turtles) [distance myself] ]
+  set avg-degree mean [count my-neighbors] of turtles
+  update-cumulative "setup" 
+  update_cumu_number
+  set number_runners 2000
+  set m_age 37
+  set m_income 60000
+  set k_age 10     
+  set k_income 11000
+  set completion-rate 0.6
+  set neighbor_effect 1.78
+  set ineffect_per 0.1
+  set prob_communication 0.0005
+  set hesitation-range 0.05
+  set threshold_intend  0.80
+  set sportpolicy 1
+  set K_second 5
+  set T_second 0.05
+  set β 0.5
+  display
+  
+end
+
+; ########## 主循环 ##########
+to go
+  if ticks >= 40[ stop ]   ; 运行满15个tick后停止
+  if ticks >= 21 [   ; 或者 if ticks >= 21，确保只执行一次可以加条件
+  set sportpolicy 1
+]
+    first-period
+    second-period
+    third-period
+    fourth-period
+    fifth-period
+    update-cumulative "after-fifth-period"
+  tick
+  
+end
+
+; ########## 各阶段过程 ##########
+
+to first-period   
+  ask turtles [
+  if runner-type = "leader" or runner-type = "mass" [
+  set fashion-ratio count turtles with [participate = true] / number_runners
+  let mass-prob  event-attraction * prob_communication * sportpolicy * (1 + EXP(fashion-ratio))
+  if random-float 1 < mass-prob [
+      set know true
+      set color red
+      stop
+    ]]
+    ; 人际传播（邻居中有已实施或风尚者）
+    if runner-type = "laggard" or runner-type = "mass" [
+    let neighbors-prob count my-neighbors with [intend = true]
+    if neighbors-prob > 0 [
+      set know true
+      set color red
+      stop
+    ]
+  ]
+  ]
+end
+
+to second-period
+ ask turtles with [know = true or state = "hesitate"] [
+ ;先计算外部效应
+    set media-effect (event-attraction * sportpolicy) * (1 + EXP (fashion-ratio) )
+     if media-effect > 1 [ set media-effect 1 ]
+    let neighbor-count count my-neighbors with [participate = true]
+     if neighbor-count > 0 [ 
+     set people-effect ((1.78 / avg-degree) *  neighbor-count) 
+      if people-effect > 1 [ set people-effect 1 ]
+    ]
+    if runner-type = "leader" [
+    set prob-exeffect media-effect
+    ]
+    if runner-type = "mass" [
+    set prob-exeffect max (list media-effect interpersonal-effect)
+    ]
+    if runner-type = "laggard" [   
+    set prob-exeffect people-effect
+    ]
+    set prob-exeffect prob-exeffect * 0.7
+   ;再在计算内部效应
+    set prob-ineffect (autonomy + competence   + relatedness)  / 3
+    set prob-ineffect prob-ineffect * 1.05
+    ;prob-ineffect (autonomy + competence + relatedness) / 3
+    if prob-ineffect > 1 [ set prob-ineffect  1 ]
+    if prob-ineffect < 0 [ set prob-ineffect  0 ]
+
+    set prob-intend  1 / (1 + exp (- K_second * ((β * prob-ineffect + (1 - β) * prob-exeffect) - T_second )))
+    
+     ifelse prob-intend >= threshold_intend + hesitation-range  [
+      set intend true
+      set color orange
+    ] [
+      ifelse prob-intend <= threshold_intend - hesitation-range [
+        set intend false
+        set color white
+      ] [
+        set state "hesitate"
+        if not is-boolean? intend [ set intend false ]
+      ]
+    ]
+    if not intend [ set participate false ]
+    set current-prob-intend prob-intend
+    set current-prob-exeffect prob-exeffect
+    set current-prob-ineffect prob-ineffect
+   
+  ]
+end
+
+
+to third-period
+  ask turtles with [intend = true][
+    let exp_age exp ((age - m_age) / k_age)
+    let p_age (1 / k_age) * exp_age / (1 + exp_age) ^ 2
+    let exp_income exp ((disposable-income - m_income) / k_income)
+    let p_income (1 / k_income) * exp_income / (1 + exp_income) ^ 2
+    let max_p_age 1 / (4 * k_age)
+    let max_p_income 1 / (4 * k_income)
+    let scale 1 / (max_p_age * max_p_income)
+    set prob_participate scale * p_age * p_income 
+    if prob_participate > 1 [ set prob_participate 1 ]
+    if prob_participate < 0 [ set prob_participate 0 ]
+    ifelse random-float 1 < prob_participate[
+      set participate true
+      set color pink
+  ] [set participate false
+      set color orange
+      
+  ]]
+end
+  
+to fourth-period
+
+  ask turtles with [participate = true] [
+   let fourth completion-rate * ( 1 + participation-count * 0.1)
+    ifelse random-float 1 < fourth [
+      set relatedness relatedness + ineffect_per
+      set autonomy autonomy + ineffect_per
+      set competence competence + ineffect_per
+      set participation-count participation-count + 1  ; ← 只有完赛才计数
+      ;if autonomy > 1 [ set autonomy 1 ]
+      ;if competence > 1 [ set competence 1 ]
+    ] [
+      set autonomy autonomy - ineffect_per
+      set relatedness relatedness - ineffect_per
+      set competence competence - ineffect_per
+     ; if autonomy < 0 [ set autonomy 0 ]
+      ;if competence < 0 [ set competence 0 ]
+    ]
+  ]
+
+end
+
+to fifth-period
+  ; 持续参与判断：参赛次数 >= 2 的 intend 者成为持续参与者
+    ask turtles with [participate = true and participation-count >= 2] [
+    set sustain true
+  ]
+  
+end
+
+
+
+to update-cumulative [stage-cumu]
+
+  set cumu-leader-know count turtles with [runner-type = "leader" and know = true]
+  set cumu-leader-intend count turtles with [runner-type = "leader" and intend = true]
+  set cumu-leader-participate count turtles with [runner-type = "leader" and participate = true]
+  set cumu-leader-sustain count turtles with [runner-type = "leader" and sustain = true ] 
+
+  set cumu-mass-know count turtles with [runner-type = "mass" and know = true]
+  set cumu-mass-intend count turtles with [runner-type = "mass" and intend = true]
+  set cumu-mass-participate count turtles with [runner-type = "mass" and participate = true]
+  set cumu-mass-sustain count turtles with [runner-type = "mass" and sustain = true ] 
+
+  set cumu-laggard-know count turtles with [runner-type = "laggard" and know = true]
+  set cumu-laggard-intend count turtles with [runner-type = "laggard" and intend = true]
+  set cumu-laggard-participate count turtles with [runner-type = "laggard" and participate = true]
+  set cumu-laggard-sustain count turtles with [runner-type = "laggard" and sustain = true ] 
+
+
+  set cumu-know-total cumu-leader-know + cumu-mass-know + cumu-laggard-know
+  set cumu-intend-total cumu-leader-intend  + cumu-mass-intend + cumu-laggard-intend
+  set cumu-participate-total cumu-leader-participate  + cumu-mass-participate + cumu-laggard-participate
+  set cumu-sustain-total cumu-leader-sustain + cumu-mass-sustain  + cumu-laggard-sustain
+
+  print (word "累计阶段: " stage-cumu
+      " | tick: " ticks
+       " | 累计知道: " cumu-know-total
+       " | 累计意图: " cumu-intend-total
+       " | 累计实施: " cumu-participate-total
+       " | 累计风尚: " cumu-sustain-total)
+end
+
+
+
+to update_cumu_number
+  set cumu-leader-know 0
+  set cumu-leader-intend 0
+  set cumu-leader-participate 0
+  set cumu-leader-sustain 0
+
+  set cumu-mass-know 0
+  set cumu-mass-intend 0
+  set cumu-mass-participate 0
+  set cumu-mass-sustain 0
+ 
+  set cumu-laggard-know 0
+  set cumu-laggard-intend 0
+  set cumu-laggard-participate 0
+  set cumu-laggard-sustain 0
+
+  set cumu-know-total 0
+  set cumu-intend-total 0
+  set cumu-participate-total 0
+  set cumu-sustain-total 0
+end 
